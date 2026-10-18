@@ -100,29 +100,37 @@ async function apiRaw(action, params = {}) {
   }
 }
 
+// 서버에서 받은 목록으로 화면 상태를 통째로 바꿈
+function applyData(r) {
+  items = (r.items || []).slice().sort((a,b) => (a.order||0) - (b.order||0));
+  if (USE_GROUPS) {
+    groups = (r.groups || []).slice().sort((a,b) => (a.order||0) - (b.order||0));
+    // 그룹 목록에 없는 항목은 '미분류'로 모음
+    items.forEach(it => {
+      if (!groups.some(g => g.id === it.group)) {
+        const gid = it.group || '_none';
+        it.group = gid;
+        if (!groups.some(g => g.id === gid)) groups.push({ id: gid, name: '미분류', order: 9999 });
+      }
+    });
+  }
+  state = {};
+  (r.executions || []).forEach(e => {
+    if (!state[e.item_id]) state[e.item_id] = [];
+    state[e.item_id].push({ id: e.exec_id, date: normDate(e.date), desc: e.desc, amount: e.amount, author: e.author || '' });
+  });
+  sortExecs();
+}
+// 각 항목의 집행 내역 날짜순 정렬
+function sortExecs(){ Object.keys(state).forEach(k => state[k].sort((a,b) => a.date.localeCompare(b.date))); }
+
 async function fetchData() {
   showLoading(true);
   const r = await api('list');
+  // 그사이 저장 중인 요청이 생겼다면, 그 요청이 끝날 때 최신 목록으로 맞추므로 여기서는 덮어쓰지 않음
+  if (inflight > 0) return;
   if (r.ok) {
-    items = (r.items || []).slice().sort((a,b) => (a.order||0) - (b.order||0));
-    if (USE_GROUPS) {
-      groups = (r.groups || []).slice().sort((a,b) => (a.order||0) - (b.order||0));
-      // 그룹 목록에 없는 항목은 '미분류'로 모음
-      items.forEach(it => {
-        if (!groups.some(g => g.id === it.group)) {
-          const gid = it.group || '_none';
-          it.group = gid;
-          if (!groups.some(g => g.id === gid)) groups.push({ id: gid, name: '미분류', order: 9999 });
-        }
-      });
-    }
-    state = {};
-    (r.executions || []).forEach(e => {
-      if (!state[e.item_id]) state[e.item_id] = [];
-      state[e.item_id].push({ id: e.exec_id, date: normDate(e.date), desc: e.desc, amount: e.amount, author: e.author || '' });
-    });
-    // 각 항목의 집행 내역 날짜순 정렬
-    Object.keys(state).forEach(k => state[k].sort((a,b) => a.date.localeCompare(b.date)));
+    applyData(r);
     render();
     updateSyncStatus(true);
   } else {
@@ -130,6 +138,41 @@ async function fetchData() {
     alert('데이터를 불러올 수 없습니다.\n\n' + r.error + '\n\n새로고침 버튼을 다시 눌러보세요.');
   }
   showLoading(false);
+}
+
+/* ============== 저장 요청 (화면 먼저 반영 → 서버 저장) ============== */
+let inflight = 0;          // 아직 답을 못 받은 저장 요청 수
+let needRefresh = false;   // 요청이 겹치거나 실패해서, 끝나면 목록을 새로 받아야 함
+
+// 화면은 이미 바뀐 상태에서 호출. 실패하면 undo()로 되돌리고 failMsg로 알림
+async function save(action, params, undo, failMsg) {
+  if (inflight > 0) needRefresh = true;
+  inflight++;
+  showLoading(true);
+  const r = await api(action, params);
+  inflight--;
+  if (!r.ok) {
+    needRefresh = true;
+    if (undo) undo();
+    render();
+  }
+  if (inflight === 0) {
+    if (r.ok && r.items && !needRefresh) {
+      // 새 서버 코드는 저장 결과와 최신 목록을 함께 돌려줌
+      applyData(r);
+      render();
+      updateSyncStatus(true);
+      showLoading(false);
+    } else {
+      needRefresh = false;
+      await fetchData();
+    }
+  }
+  if (!r.ok) {
+    updateSyncStatus(false, r.error);
+    alert(failMsg + r.error);
+  }
+  return r;
 }
 
 /* ============== 작성자 ============== */
@@ -153,23 +196,38 @@ function changeAuthor(isInitial) {
 }
 
 /* ============== 집행 내역 추가·수정·삭제 ============== */
+let tempSeq = 0;
 async function addExec(id, ev){
   ev.stopPropagation();
   const dEl=document.getElementById('d_'+id), descEl=document.getElementById('desc_'+id), aEl=document.getElementById('amt_'+id);
   const date=dEl.value, desc=descEl.value.trim(), amount=parseInt(aEl.value);
   if(!date||!desc||!amount||amount<=0){ alert('날짜, 내용, 금액을 모두 입력하세요.'); return; }
-  showLoading(true);
-  const r = await api('add_exec', { item_id: id, date, desc, amount, author });
-  if (r.ok) { descEl.value=''; aEl.value=''; await fetchData(); }
-  else { showLoading(false); updateSyncStatus(false, r.error); alert('저장 실패: ' + r.error); }
+  // 서버가 진짜 번호를 주기 전까지 쓸 임시 번호 (음수라 실제 번호와 겹치지 않음)
+  const tmp = { id: -(++tempSeq), date, desc, amount, author, pending: true };
+  if (!state[id]) state[id] = [];
+  state[id].push(tmp);
+  sortExecs();
+  descEl.value=''; aEl.value='';
+  render();
+  await save('add_exec', { item_id: id, date, desc, amount, author }, () => {
+    state[id] = getExecs(id).filter(e => e !== tmp);
+    render();
+    // 입력했던 값을 입력칸에 되돌려 다시 누를 수 있게 함
+    const d2=document.getElementById('d_'+id), desc2=document.getElementById('desc_'+id), a2=document.getElementById('amt_'+id);
+    if (d2) d2.value = date;
+    if (desc2) desc2.value = desc;
+    if (a2) a2.value = amount;
+  }, '저장 실패: ');
 }
 async function delExec(itemId, execId, ev){
   ev.stopPropagation();
   if(!confirm('이 집행 내역을 삭제하시겠습니까?\n모든 부서원 화면에서 사라집니다.')) return;
-  showLoading(true);
-  const r = await api('delete_exec', { exec_id: execId });
-  if (r.ok) await fetchData();
-  else { showLoading(false); updateSyncStatus(false, r.error); alert('삭제 실패: ' + r.error); }
+  const removed = getExecs(itemId).find(e => e.id === execId);
+  state[itemId] = getExecs(itemId).filter(e => e.id !== execId);
+  render();
+  await save('delete_exec', { exec_id: execId }, () => {
+    if (removed) { (state[itemId] = getExecs(itemId)).push(removed); sortExecs(); }
+  }, '삭제 실패: ');
 }
 function startEdit(itemId, execId, ev){ ev.stopPropagation(); editing[itemId]=execId; render(); }
 function cancelEdit(itemId, ev){ ev.stopPropagation(); delete editing[itemId]; render(); }
@@ -178,10 +236,15 @@ async function saveEdit(itemId, execId, ev){
   const dEl=document.getElementById('ed_'+execId), descEl=document.getElementById('edesc_'+execId), aEl=document.getElementById('eamt_'+execId);
   const date=dEl.value, desc=descEl.value.trim(), amount=parseInt(aEl.value);
   if(!date||!desc||!amount||amount<=0){ alert('날짜, 내용, 금액을 모두 입력하세요.'); return; }
-  showLoading(true);
-  const r = await api('update_exec', { exec_id: execId, date, desc, amount });
-  if (r.ok) { delete editing[itemId]; await fetchData(); }
-  else { showLoading(false); updateSyncStatus(false, r.error); alert('수정 실패: ' + r.error); }
+  const target = getExecs(itemId).find(e => e.id === execId);
+  const before = target && { date: target.date, desc: target.desc, amount: target.amount, pending: target.pending };
+  if (target) Object.assign(target, { date, desc, amount, pending: true });
+  sortExecs();
+  delete editing[itemId];
+  render();
+  await save('update_exec', { exec_id: execId, date, desc, amount }, () => {
+    if (target) { Object.assign(target, before); sortExecs(); }
+  }, '수정 실패: ');
 }
 function toggle(id){ open[id]=!open[id]; render(); }
 
@@ -212,15 +275,8 @@ async function onItemDrop(gid, toIdx, ev){
   items = USE_GROUPS ? groups.flatMap(g => g.id === gid ? list : groupItems(g.id)) : list;
   items.forEach((it, i) => { it.order = i + 1; });
   render();
-  showLoading(true);
-  const r = await api('reorder', { order: items.map(i => i.id) });
-  showLoading(false);
-  if (r.ok) updateSyncStatus(true);
-  else {
-    updateSyncStatus(false, r.error);
-    alert('순서 저장 실패: ' + r.error + '\n\n서버의 순서로 되돌립니다.');
-    await fetchData();
-  }
+  // 실패하면 save()가 서버의 순서로 다시 맞춤
+  await save('reorder', { order: items.map(i => i.id) }, null, '순서 저장 실패: ');
 }
 
 /* ============== 백업 ============== */
@@ -286,14 +342,14 @@ function renderItemCard(item, idx, gid){
         </div>
       </div>`;
     }
-    return `<div class="exec-row">
+    return `<div class="exec-row${e.pending ? ' pending' : ''}">
       <div class="exec-date">${esc(showDate(e.date))}</div>
       <div class="exec-desc">${esc(e.desc)}</div>
       <div class="exec-amt">${fmt(e.amount)}</div>
       <div class="exec-author">${esc(e.author || '')}</div>
-      <div class="exec-actions">
+      <div class="exec-actions">${e.pending ? '<span class="pending-note">저장 중…</span>' : `
         <button class="btn-act btn-edit" onclick="startEdit('${item.id}',${e.id},event)">수정</button>
-        <button class="btn-act btn-del"  onclick="delExec('${item.id}',${e.id},event)">삭제</button>
+        <button class="btn-act btn-del"  onclick="delExec('${item.id}',${e.id},event)">삭제</button>`}
       </div>
     </div>`;
   }).join('');
@@ -339,13 +395,22 @@ function renderItemCard(item, idx, gid){
   </div>`;
 }
 
-function render(){ renderSummary(); renderBody(); }
+function render(){
+  // 다시 그려도 입력 중이던 값과 커서가 사라지지 않게 보존
+  const kept = {};
+  document.querySelectorAll('.page-container input[id]').forEach(el => { kept[el.id] = el.value; });
+  const focusId = document.activeElement && document.activeElement.id;
+  renderSummary(); renderBody();
+  Object.keys(kept).forEach(k => { const el = document.getElementById(k); if (el) el.value = kept[k]; });
+  const f = focusId && document.getElementById(focusId);
+  if (f) f.focus();
+}
 
 /* ============== 시작 ============== */
 function startApp(){
   // 입력 중이거나 편집·드래그 중일 때는 자동 동기화를 건너뜀
   setInterval(() => {
-    if (Object.keys(editing).length > 0 || drag) return;
+    if (Object.keys(editing).length > 0 || drag || inflight > 0) return;
     const a = document.activeElement;
     if (a && (a.tagName === 'INPUT' || a.tagName === 'TEXTAREA')) return;
     fetchData();

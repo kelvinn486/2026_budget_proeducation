@@ -53,6 +53,8 @@ function handleRequest(e) {
       case 'reorder':      result = handleReorder(ss, params); break;
       default: result = { ok: false, error: 'unknown action: ' + action };
     }
+    // 저장·수정·삭제가 성공하면 최신 목록을 함께 돌려줌 (화면이 목록을 다시 요청하지 않아도 됨)
+    if (action !== 'list' && result.ok) result = Object.assign(handleList(ss), result);
     return jsonResponse(result);
   } catch (err) {
     return jsonResponse({ ok: false, error: String(err) });

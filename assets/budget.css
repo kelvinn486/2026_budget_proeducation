@@ -179,6 +179,8 @@ body {
 .exec-amt { text-align: right; font-weight: 500; }
 .exec-author { font-size: 11px; color: var(--color-text-tertiary); text-align: center; }
 .exec-actions { text-align: right; }
+.exec-row.pending { opacity: 0.55; }
+.pending-note { font-size: 11px; color: var(--color-text-tertiary); }
 
 .btn-act { font-size: 12px; padding: 3px 8px; border-radius: var(--border-radius-md); background: none; cursor: pointer; white-space: nowrap; font-family: inherit; }
 .btn-edit   { color: var(--color-text-info);     border: 0.5px solid var(--color-border-info); }
