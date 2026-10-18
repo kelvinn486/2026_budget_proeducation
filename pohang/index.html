@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>2026년 포항혁신지구 예산 관리</title>
-<link rel="stylesheet" href="../assets/budget.css?v=2">
+<link rel="stylesheet" href="../assets/budget.css?v=3">
 </head>
 <body>
 <div class="loading-overlay" id="loading">⟳ 서버와 동기화 중...</div>
@@ -12,7 +12,7 @@
 <div class="page-container">
   <div class="page-header">
     <div class="header-left">
-      <div class="page-title">2026년 포항혁신지구 지원사업 예산 관리</div>
+      <div class="page-title"><span data-year>2026</span>년 포항혁신지구 지원사업 예산 관리</div>
       <div class="page-subtitle">
         <span class="author-badge">작성자: <strong id="author-display">—</strong>
           <button class="link-btn" onclick="changeAuthor()">변경</button>
@@ -54,9 +54,10 @@
   </div>
 </div>
 
-<script src="../assets/budget-common.js?v=2"></script>
+<script src="../assets/budget-common.js?v=3"></script>
 <script>
 /* ============== 이 화면의 설정 ============== */
+const FISCAL_YEAR = 2026;   // 회계연도 — 해가 바뀌면 이 숫자만 고치면 제목·백업 파일에 반영됨
 const SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbx4_EY-ErQtDK2U7ibZ7ufgrQJZ72gnD2tflnYP7RgedTEM4ov4eUPvTzCHYtWQ8xBQRA/exec';
 const PROGRAM_NAME = '포항혁신지구 지원사업';
 const BACKUP_PREFIX = '포항혁신지구';

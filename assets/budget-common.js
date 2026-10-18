@@ -2,6 +2,7 @@
  * 예산 관리 화면 공용 코드 — 전문교육부(index.html)·포항(pohang/index.html)이 함께 씁니다.
  *
  * 이 파일을 불러오는 페이지는 아래 설정값과 함수를 정의해야 합니다.
+ *   FISCAL_YEAR      : 회계연도 (예: 2026) — 제목과 백업 파일에 쓰임
  *   SCRIPT_URL       : Apps Script 웹앱 주소
  *   PROGRAM_NAME     : 백업 파일에 기록할 사업 이름
  *   BACKUP_PREFIX    : 백업 파일 이름 앞부분 (예: '전문교육부')
@@ -285,7 +286,7 @@ function exportBackup(){
   const totalBudget = items.reduce((s,i)=>s+i.budget,0);
   const totalUsed = items.reduce((s,i)=>s+getUsed(i.id),0);
   const payload = {
-    program: PROGRAM_NAME, fiscal_year: 2026,
+    program: PROGRAM_NAME, fiscal_year: FISCAL_YEAR,
     exported_at: new Date().toISOString(), exported_by: author, version: 'cloud-1',
     total_budget: totalBudget, total_used: totalUsed, total_remaining: totalBudget - totalUsed,
   };
@@ -408,6 +409,9 @@ function render(){
 
 /* ============== 시작 ============== */
 function startApp(){
+  // 제목의 연도를 설정값으로 맞춤
+  document.title = document.title.replace(/^\d{4}년/, FISCAL_YEAR + '년');
+  document.querySelectorAll('[data-year]').forEach(el => { el.textContent = FISCAL_YEAR; });
   // 입력 중이거나 편집·드래그 중일 때는 자동 동기화를 건너뜀
   setInterval(() => {
     if (Object.keys(editing).length > 0 || drag || inflight > 0) return;
